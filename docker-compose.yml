@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:6.0
+    container_name: my_app_mongo
+    restart: unless-stopped
+    env_file:
+      - ./.env.production
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - app-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: my_app_backend
+    restart: unless-stopped
+    env_file:
+      - ./.env.production
+    volumes:
+      - static_data:/app/public/uploads
+    expose:
+      - "5000"
+    depends_on:
+      - mongo
+    networks:
+      - app-network
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: my_app_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  static_data:
+  certbot_conf:
