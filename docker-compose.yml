@@ -44,6 +44,7 @@ services:
       - "443:443"
     volumes:
       - certbot_conf:/etc/letsencrypt
+      - certbot_challenges:/var/www/certbot
     depends_on:
       - backend
     networks:
@@ -57,3 +58,4 @@ volumes:
   mongo_data:
   static_data:
   certbot_conf:
+  certbot_challenges:
