@@ -9,6 +9,7 @@ services:
       - ./.env.production
     volumes:
       - mongo_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
     networks:
       - app-network
 
