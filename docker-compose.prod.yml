@@ -1,10 +1,8 @@
 services:
   backend:
-    build: null
     image: ${BACKEND_IMAGE}
     pull_policy: always
 
   nginx:
-    build: null
     image: ${FRONTEND_IMAGE}
     pull_policy: always 
