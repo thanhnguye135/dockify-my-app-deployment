@@ -2,13 +2,10 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy production dependencies manifest
 COPY backend-dist/package.json ./
 
-# Install production dependencies
 RUN yarn install --production
 
-# Copy the built application code
 COPY backend-dist/ .
 
 EXPOSE 5000
