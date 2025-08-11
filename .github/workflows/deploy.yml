@@ -25,9 +25,10 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Create .env.production locally
-        if: ${{ secrets.ENV_PRODUCTION != '' }}
         run: |
-          printf "%s" "${{ secrets.ENV_PRODUCTION }}" > .env.production
+          if [ -n "${{ secrets.ENV_PRODUCTION }}" ]; then
+            printf "%s" "${{ secrets.ENV_PRODUCTION }}" > .env.production
+          fi
 
       - name: Build and push backend image
         uses: docker/build-push-action@v6
