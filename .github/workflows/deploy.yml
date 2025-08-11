@@ -61,16 +61,31 @@ jobs:
 
       - name: Deploy via compose on VPS
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "\
-            export BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' \
-                   DOCKER_USERNAME='${{ secrets.DOCKER_USERNAME }}' \
-                   DOCKER_PASSWORD='${{ secrets.DOCKER_PASSWORD }}' \
-                   COMPOSE_HTTP_TIMEOUT=200 && \
-            echo \"\$DOCKER_PASSWORD\" | docker login -u \"\$DOCKER_USERNAME\" --password-stdin && \
-            cd /srv/dockify-my-app-deployment && \
-            n=0; until [ \"$n\" -ge 3 ]; do \
-              docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull && break; \
-              n=$((n+1)); echo 'Pull failed, retrying...'; sleep 10; \
-            done && \
-            docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d && \
-            docker image prune -f" 
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} 'bash -s' <<'REMOTE_SCRIPT'
+set -euo pipefail
+
+export BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}'
+export FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}'
+export COMPOSE_HTTP_TIMEOUT=200
+
+echo '${{ secrets.DOCKER_PASSWORD }}' | docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
+
+cd /srv/dockify-my-app-deployment
+pwd
+ls -la || true
+
+attempt=1
+max_attempts=5
+until docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull; do
+  echo "Pull failed (attempt ${attempt}/${max_attempts}), retrying in 10s..."
+  sleep 10
+  attempt=$((attempt+1))
+  if [ ${attempt} -gt ${max_attempts} ]; then
+    echo "Pull failed after ${max_attempts} attempts"
+    exit 1
+  fi
+done
+
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker image prune -f
+REMOTE_SCRIPT 
