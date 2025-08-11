@@ -61,19 +61,15 @@ jobs:
 
       - name: Deploy via compose on VPS
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} 'bash -s' <<'REMOTE_SCRIPT'
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} bash -lc '
             set -euo pipefail
-            
-            export BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}'
-            export FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}'
+            export BACKEND_IMAGE="${{ env.BACKEND_IMAGE }}"
+            export FRONTEND_IMAGE="${{ env.FRONTEND_IMAGE }}"
             export COMPOSE_HTTP_TIMEOUT=200
-            
-            echo '${{ secrets.DOCKER_PASSWORD }}' | docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
-            
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             cd /srv/dockify-my-app-deployment
             pwd
             ls -la || true
-            
             attempt=1
             max_attempts=5
             until docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull; do
@@ -85,7 +81,6 @@ jobs:
                 exit 1
               fi
             done
-            
             docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
             docker image prune -f
-          REMOTE_SCRIPT 
+          ' 
