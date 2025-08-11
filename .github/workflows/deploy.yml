@@ -61,4 +61,16 @@ jobs:
 
       - name: Deploy via compose on VPS
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "export BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' && cd /srv/dockify-my-app-deployment && docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull && docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d && docker image prune -f" 
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "\
+            export BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' \
+                   DOCKER_USERNAME='${{ secrets.DOCKER_USERNAME }}' \
+                   DOCKER_PASSWORD='${{ secrets.DOCKER_PASSWORD }}' \
+                   COMPOSE_HTTP_TIMEOUT=200 && \
+            echo \"\$DOCKER_PASSWORD\" | docker login -u \"\$DOCKER_USERNAME\" --password-stdin && \
+            cd /srv/dockify-my-app-deployment && \
+            n=0; until [ \"$n\" -ge 3 ]; do \
+              docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull && break; \
+              n=$((n+1)); echo 'Pull failed, retrying...'; sleep 10; \
+            done && \
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d && \
+            docker image prune -f" 
