@@ -65,14 +65,36 @@ jobs:
             set -euo pipefail
             export BACKEND_IMAGE="${{ env.BACKEND_IMAGE }}"
             export FRONTEND_IMAGE="${{ env.FRONTEND_IMAGE }}"
-            export COMPOSE_HTTP_TIMEOUT=200
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+            export COMPOSE_HTTP_TIMEOUT=300
+            export DOCKER_CLIENT_TIMEOUT=300
+
+            # Retry docker login to mitigate transient TLS/network issues
+            login_attempt=1
+            login_max_attempts=5
+            until echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin; do
+              echo "Login failed (attempt ${login_attempt}/${login_max_attempts}), retrying in 10s..."
+              sleep 10
+              login_attempt=$((login_attempt+1))
+              if [ ${login_attempt} -gt ${login_max_attempts} ]; then
+                echo "Login failed after ${login_max_attempts} attempts"
+                exit 1
+              fi
+            done
+
+            # Determine docker compose command (v1 or v2)
+            if command -v docker-compose >/dev/null 2>&1; then
+              DC="docker-compose"
+            else
+              DC="docker compose"
+            fi
+
             cd /srv/dockify-my-app-deployment
             pwd
             ls -la || true
+
             attempt=1
             max_attempts=5
-            until docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull; do
+            until ${DC} -f docker-compose.yml -f docker-compose.prod.yml pull; do
               echo "Pull failed (attempt ${attempt}/${max_attempts}), retrying in 10s..."
               sleep 10
               attempt=$((attempt+1))
@@ -81,6 +103,6 @@ jobs:
                 exit 1
               fi
             done
-            docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            ${DC} -f docker-compose.yml -f docker-compose.prod.yml up -d
             docker image prune -f
           ' 
