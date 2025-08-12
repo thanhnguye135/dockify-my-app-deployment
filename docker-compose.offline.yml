@@ -5,4 +5,14 @@ services:
 
   nginx:
     image: ${FRONTEND_IMAGE}
-    pull_policy: never 
+    pull_policy: never
+    ports:
+      - "80:80"
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_challenges:/var/www/certbot
+      - ./nginx/conf.d/default.http.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  certbot_conf:
+  certbot_challenges: 
