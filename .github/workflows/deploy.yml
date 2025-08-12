@@ -46,6 +46,16 @@ jobs:
           push: true
           tags: ${{ env.FRONTEND_IMAGE }}
 
+      - name: Save images as tarballs for offline fallback
+        run: |
+          set -euo pipefail
+          echo "Pulling pushed images on runner to package tarballs as a fallback..."
+          docker pull "${{ env.BACKEND_IMAGE }}"
+          docker save "${{ env.BACKEND_IMAGE }}" -o backend-image.tar
+          docker pull "${{ env.FRONTEND_IMAGE }}"
+          docker save "${{ env.FRONTEND_IMAGE }}" -o frontend-image.tar
+          ls -lh *.tar
+
       - name: Add SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -55,7 +65,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /srv/dockify-my-app-deployment && exit"
 
-      - name: Sync repository to VPS
+      - name: Sync repository to VPS (includes tarballs)
         run: |
           rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/srv/dockify-my-app-deployment/
 
@@ -68,19 +78,6 @@ jobs:
             export COMPOSE_HTTP_TIMEOUT=300
             export DOCKER_CLIENT_TIMEOUT=300
 
-            # Retry docker login to mitigate transient TLS/network issues
-            login_attempt=1
-            login_max_attempts=5
-            until echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin; do
-              echo "Login failed (attempt ${login_attempt}/${login_max_attempts}), retrying in 10s..."
-              sleep 10
-              login_attempt=$((login_attempt+1))
-              if [ ${login_attempt} -gt ${login_max_attempts} ]; then
-                echo "Login failed after ${login_max_attempts} attempts"
-                exit 1
-              fi
-            done
-
             # Determine docker compose command (v1 or v2)
             if command -v docker-compose >/dev/null 2>&1; then
               DC="docker-compose"
@@ -92,17 +89,62 @@ jobs:
             pwd
             ls -la || true
 
-            attempt=1
-            max_attempts=5
-            until ${DC} -f docker-compose.yml -f docker-compose.prod.yml pull; do
-              echo "Pull failed (attempt ${attempt}/${max_attempts}), retrying in 10s..."
+            # Try to log in to Docker Hub with retries
+            login_max_attempts=5
+            login_ok=0
+            for login_attempt in $(seq 1 ${login_max_attempts}); do
+              if echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin; then
+                login_ok=1
+                break
+              fi
+              echo "Login failed (attempt ${login_attempt}/${login_max_attempts}), retrying in 10s..."
               sleep 10
-              attempt=$((attempt+1))
-              if [ ${attempt} -gt ${max_attempts} ]; then
-                echo "Pull failed after ${max_attempts} attempts"
+            done
+
+            pulled_ok=0
+            if [ ${login_ok} -eq 1 ]; then
+              echo "Login succeeded, attempting to pull images..."
+              attempt=1
+              max_attempts=5
+              until ${DC} -f docker-compose.yml -f docker-compose.prod.yml pull; do
+                echo "Pull failed (attempt ${attempt}/${max_attempts}), retrying in 10s..."
+                sleep 10
+                attempt=$((attempt+1))
+                if [ ${attempt} -gt ${max_attempts} ]; then
+                  echo "Pull failed after ${max_attempts} attempts"
+                  break
+                fi
+              done
+              if [ ${attempt:-0} -le ${max_attempts} ]; then
+                pulled_ok=1
+              fi
+            else
+              echo "Docker Hub login failed after ${login_max_attempts} attempts."
+            fi
+
+            # Compose pull behavior for up
+            PULL_FLAG="--pull never"
+            if [ ${pulled_ok} -eq 1 ]; then
+              PULL_FLAG="--pull missing"
+            fi
+
+            if [ ${pulled_ok} -ne 1 ]; then
+              echo "Falling back to offline deploy using local tarballs."
+              echo "Basic diagnostics (IPv4 test):"
+              (command -v dig >/dev/null 2>&1 && dig +short registry-1.docker.io || true)
+              (curl -4 -sS -m 15 -v https://registry-1.docker.io/v2/ || true)
+              (timedatectl 2>/dev/null || true)
+
+              if [ -f backend-image.tar ] && [ -f frontend-image.tar ]; then
+                echo "Loading backend and frontend images from tarballs..."
+                docker load -i backend-image.tar
+                docker load -i frontend-image.tar
+              else
+                echo "Tarball images not found. Expected backend-image.tar and frontend-image.tar in repo root."
                 exit 1
               fi
-            done
-            ${DC} -f docker-compose.yml -f docker-compose.prod.yml up -d
+            fi
+
+            ${DC} -f docker-compose.yml -f docker-compose.prod.yml up -d ${PULL_FLAG}
             docker image prune -f
           ' 
