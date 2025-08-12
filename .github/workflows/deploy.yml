@@ -78,22 +78,57 @@ jobs:
             export COMPOSE_HTTP_TIMEOUT=300
             export DOCKER_CLIENT_TIMEOUT=300
 
-            # Determine docker compose command (v1 or v2)
-            if command -v docker-compose >/dev/null 2>&1; then
-              DC="docker-compose"
+            # Detect usable docker CLI (with or without sudo)
+            if docker info >/dev/null 2>&1; then
+              DOCKER="docker"
+            elif sudo -n docker info >/dev/null 2>&1; then
+              DOCKER="sudo docker"
             else
-              DC="docker compose"
+              echo "Docker is not available for the current user and passwordless sudo is not configured."
+              exit 1
+            fi
+
+            # Detect compose (v2 plugin preferred)
+            if $DOCKER compose version >/dev/null 2>&1; then
+              DC="$DOCKER compose"
+              COMPOSE_IS_V2=1
+            elif command -v docker-compose >/dev/null 2>&1; then
+              DC="docker-compose"
+              COMPOSE_IS_V2=0
+            elif command -v sudo >/dev/null 2>&1 && sudo -n command -v docker-compose >/dev/null 2>&1; then
+              DC="sudo docker-compose"
+              COMPOSE_IS_V2=0
+            else
+              echo "Neither docker compose nor docker-compose is available on the server."
+              exit 1
             fi
 
             cd /srv/dockify-my-app-deployment
             pwd
             ls -la || true
 
-            # Try to log in to Docker Hub with retries
+            umask 077
+            export HOME="${HOME:-~}"
+            export DOCKER_CONFIG="${HOME}/.docker"
+            mkdir -p "${DOCKER_CONFIG}"
+
+            echo "User: $(whoami)"
+            id || true
+
+            # Try to log in to Docker Hub with retries (token preferred over password)
+            export DOCKER_USERNAME="${{ secrets.DOCKER_USERNAME }}"
+            DOCKER_SECRET="${{ secrets.DOCKERHUB_TOKEN }}"
+            if [ -z "${DOCKER_SECRET}" ]; then
+              DOCKER_SECRET="${{ secrets.DOCKER_PASSWORD }}"
+            fi
+            if [ -z "${DOCKER_USERNAME}" ] || [ -z "${DOCKER_SECRET}" ]; then
+              echo "Docker credentials are not configured in secrets (DOCKER_USERNAME and DOCKERHUB_TOKEN/DOCKER_PASSWORD)."
+            fi
             login_max_attempts=5
             login_ok=0
             for login_attempt in $(seq 1 ${login_max_attempts}); do
-              if echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin; then
+              if [ -n "${DOCKER_USERNAME}" ] && [ -n "${DOCKER_SECRET}" ] \
+                 && printf "%s" "${DOCKER_SECRET}" | $DOCKER login docker.io -u "${DOCKER_USERNAME}" --password-stdin; then
                 login_ok=1
                 break
               fi
@@ -103,10 +138,14 @@ jobs:
 
             pulled_ok=0
             if [ ${login_ok} -eq 1 ]; then
-              echo "Login succeeded, attempting to pull images..."
+              echo "Login succeeded, pulling images to ensure latest..."
               attempt=1
               max_attempts=5
-              until ${DC} -f docker-compose.yml -f docker-compose.prod.yml pull; do
+              PULL_QUIET=""
+              if [ "${COMPOSE_IS_V2}" = "1" ]; then
+                PULL_QUIET="--quiet"
+              fi
+              until ${DC} -f docker-compose.yml -f docker-compose.prod.yml pull ${PULL_QUIET}; do
                 echo "Pull failed (attempt ${attempt}/${max_attempts}), retrying in 10s..."
                 sleep 10
                 attempt=$((attempt+1))
@@ -123,9 +162,14 @@ jobs:
             fi
 
             # Compose pull behavior for up
-            PULL_FLAG="--pull never"
             if [ ${pulled_ok} -eq 1 ]; then
-              PULL_FLAG="--pull missing"
+              PULL_FLAG="--pull always"
+            else
+              if [ "${COMPOSE_IS_V2}" = "1" ]; then
+                PULL_FLAG="--pull never"
+              else
+                PULL_FLAG=""
+              fi
             fi
 
             if [ ${pulled_ok} -ne 1 ]; then
@@ -137,14 +181,14 @@ jobs:
 
               if [ -f backend-image.tar ] && [ -f frontend-image.tar ]; then
                 echo "Loading backend and frontend images from tarballs..."
-                docker load -i backend-image.tar
-                docker load -i frontend-image.tar
+                $DOCKER load -i backend-image.tar
+                $DOCKER load -i frontend-image.tar
               else
                 echo "Tarball images not found. Expected backend-image.tar and frontend-image.tar in repo root."
                 exit 1
               fi
             fi
 
-            ${DC} -f docker-compose.yml -f docker-compose.prod.yml up -d ${PULL_FLAG}
-            docker image prune -f
+            ${DC} -f docker-compose.yml -f docker-compose.prod.yml up -d ${PULL_FLAG} --remove-orphans
+            $DOCKER image prune -f
           ' 
